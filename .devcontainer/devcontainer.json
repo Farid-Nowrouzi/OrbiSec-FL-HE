@@ -1,0 +1,6 @@
+{
+  "name": "satsec-fl",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "postCreateCommand": "pip install -U pip && pip install -r requirements.txt",
+  "features": { "ghcr.io/devcontainers/features/common-utils:2": {} }
+}
