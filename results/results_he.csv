@@ -1,0 +1,2 @@
+num_clients,num_layers,layer_dim,mean_mse,layer_mse_0,layer_mse_1,layer_mse_2
+8,3,256,2.1163792167517682e-19,1.9926354385492703e-19,2.1950615401348664e-19,2.1614406715711678e-19
