@@ -3,13 +3,19 @@ from typing import Dict, Optional, Tuple
 
 import flwr as fl
 import torch
-from flwr.common import Parameters, Scalar, parameters_to_ndarrays
+from flwr.common import (
+    Parameters,
+    Scalar,
+    parameters_to_ndarrays,
+    ndarrays_to_parameters,
+)
 
 from src.utils import estimate_bytes, append_to_csv, binary_accuracy
+from src.secure_he import CKKSSecureAggregator
 
 
 def _set_model_parameters_from_fl(
-    model: torch.nn.Module, parameters: Parameters
+        model: torch.nn.Module, parameters: Parameters
 ) -> None:
     """Load Flower Parameters into a PyTorch model."""
     ndarrays = parameters_to_ndarrays(parameters)
@@ -45,18 +51,21 @@ class LoggingFedAvg(fl.server.strategy.FedAvg):
     """
     FedAvg strategy that logs per-round metrics to CSV:
     round, acc, bytes_up, bytes_down, round_time, active_clients, seed, config.
+
+    If secure_mode == "ckks", the aggregation is performed using the
+    CKKSSecureAggregator instead of the standard FedAvg averaging.
     """
 
     def __init__(
-        self,
-        model: torch.nn.Module,
-        val_loader,
-        device: torch.device,
-        results_csv: str,
-        seed: int,
-        secure_mode: str,
-        num_clients: int,
-        dropout_prob: float,
+            self,
+            model: torch.nn.Module,
+            val_loader,
+            device: torch.device,
+            results_csv: str,
+            seed: int,
+            secure_mode: str,
+            num_clients: int,
+            dropout_prob: float,
     ):
         self.model = model.to(device)
         self.val_loader = val_loader
@@ -68,7 +77,10 @@ class LoggingFedAvg(fl.server.strategy.FedAvg):
         self.dropout_prob = dropout_prob
         self._last_time = time.time()
 
-        # approximate update size per client
+        # CKKS secure aggregator (only used when secure_mode == "ckks")
+        self._ckks_agg: Optional[CKKSSecureAggregator] = None
+
+        # Approximate update size per client (for byte logging)
         self.param_bytes = estimate_bytes(self.model.state_dict())
 
         fraction_fit = 1.0 - dropout_prob
@@ -82,18 +94,74 @@ class LoggingFedAvg(fl.server.strategy.FedAvg):
             min_available_clients=num_clients,
         )
 
-    # --- override aggregate_fit to log metrics ---
+    # ------------------------------------------------------------------
+    # CKKS aggregation helper
+    # ------------------------------------------------------------------
+
+    def _aggregate_fit_ckks(self, results) -> Optional[Parameters]:
+        """Aggregate client updates using CKKS homomorphic encryption.
+
+        This mirrors the Week-2 demo:
+        1. Collect client parameter ndarrays.
+        2. Flatten all updates.
+        3. Encrypt, homomorphically sum, and decrypt.
+        4. Reconstruct layer-shaped ndarrays and wrap as Flower Parameters.
+        """
+        if not results:
+            return None
+
+        # Lazily initialise CKKS aggregator
+        if self._ckks_agg is None:
+            self._ckks_agg = CKKSSecureAggregator()
+
+        # 1) Collect parameter ndarrays from each client
+        client_updates = []
+        for _, fit_res in results:
+            if fit_res.parameters is None:
+                continue
+            nds = parameters_to_ndarrays(fit_res.parameters)
+            client_updates.append(nds)
+
+        if not client_updates:
+            return None
+
+        # 2) Flatten updates
+        flat_updates, flatten_info = self._ckks_agg.flatten_updates(client_updates)
+
+        # 3) Encrypt and aggregate in the encrypted domain
+        enc_updates = self._ckks_agg.encrypt_updates(flat_updates)
+        enc_sum = self._ckks_agg.aggregate_encrypted(enc_updates)
+
+        # 4) Decrypt and reconstruct averaged update
+        avg_update_ndarrays = self._ckks_agg.decrypt_aggregate(
+            enc_sum, flatten_info, num_clients=len(client_updates)
+        )
+
+        # Convert back to Flower Parameters
+        return ndarrays_to_parameters(avg_update_ndarrays)
+
+    # ------------------------------------------------------------------
+    # Override aggregate_fit to plug in logging (and optionally CKKS)
+    # ------------------------------------------------------------------
 
     def aggregate_fit(
-        self,
-        server_round: int,
-        results,
-        failures,
+            self,
+            server_round: int,
+            results,
+            failures,
     ) -> Tuple[Optional[Parameters], Dict[str, Scalar]]:
         start_time = self._last_time
-        aggregated_parameters, _ = super().aggregate_fit(
-            server_round, results, failures
-        )
+
+        # Use CKKS-based aggregation only when requested
+        if self.secure_mode.lower() == "ckks":
+            aggregated_parameters = self._aggregate_fit_ckks(results)
+            # We ignore client metrics here (can be added later if needed)
+        else:
+            # Standard FedAvg aggregation
+            aggregated_parameters, _ = super().aggregate_fit(
+                server_round, results, failures
+            )
+
         end_time = time.time()
         self._last_time = end_time
 
@@ -123,20 +191,20 @@ class LoggingFedAvg(fl.server.strategy.FedAvg):
         }
         append_to_csv(self.results_csv, row)
 
-        # we don't currently use aggregated metrics, but we can return an empty dict
+        # We don't currently use aggregated metrics, but we can return an empty dict
         metrics: Dict[str, Scalar] = {}
         return aggregated_parameters, metrics
 
 
 def make_strategy(
-    model: torch.nn.Module,
-    val_loader,
-    device: torch.device,
-    results_csv: str,
-    seed: int,
-    secure_mode: str,
-    num_clients: int,
-    dropout_prob: float,
+        model: torch.nn.Module,
+        val_loader,
+        device: torch.device,
+        results_csv: str,
+        seed: int,
+        secure_mode: str,
+        num_clients: int,
+        dropout_prob: float,
 ) -> LoggingFedAvg:
     """Factory to create the LoggingFedAvg strategy."""
     return LoggingFedAvg(

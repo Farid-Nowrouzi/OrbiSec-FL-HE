@@ -11,7 +11,7 @@ Week-2: CKKS homomorphic encryption demo for secure federated aggregation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import numpy as np
 import tenseal as ts
@@ -36,10 +36,10 @@ class CKKSSecureAggregator:
     """
 
     def __init__(
-        self,
-        poly_mod_degree: int = 8192,
-        coeff_mod_bit_sizes: List[int] | None = None,
-        global_scale: float = 2**40,
+            self,
+            poly_mod_degree: int = 8192,
+            coeff_mod_bit_sizes: Optional[List[int]] = None,
+            global_scale: float = 2**40,
     ) -> None:
         if coeff_mod_bit_sizes is None:
             # Reasonable default for small experiments
@@ -59,7 +59,7 @@ class CKKSSecureAggregator:
     # ------------------------------------------------------------------
     @staticmethod
     def flatten_updates(
-        client_updates: List[List[np.ndarray]]
+            client_updates: List[List[np.ndarray]]
     ) -> Tuple[List[np.ndarray], FlattenInfo]:
         """
         Flatten each client's list of arrays into a single 1D vector.
@@ -90,12 +90,10 @@ class CKKSSecureAggregator:
 
     @staticmethod
     def unflatten_update(
-        flat_vec: np.ndarray,
-        info: FlattenInfo,
+            flat_vec: np.ndarray,
+            info: FlattenInfo,
     ) -> List[np.ndarray]:
-        """
-        Inverse of `flatten_updates` for a single vector.
-        """
+        """Inverse of `flatten_updates` for a single vector."""
         arrays: List[np.ndarray] = []
         idx = 0
         for size, shape in zip(info.sizes, info.shapes):
@@ -108,11 +106,9 @@ class CKKSSecureAggregator:
     # Encryption helpers
     # ------------------------------------------------------------------
     def encrypt_updates(
-        self, flat_per_client: List[np.ndarray]
+            self, flat_per_client: List[np.ndarray]
     ) -> List[ts.CKKSVector]:
-        """
-        Encrypt each client's flat update as a CKKS vector.
-        """
+        """Encrypt each client's flat update as a CKKS vector."""
         ciphertexts: List[ts.CKKSVector] = []
         for flat in flat_per_client:
             # TenSEAL expects a Python list
@@ -121,7 +117,7 @@ class CKKSSecureAggregator:
         return ciphertexts
 
     def aggregate_encrypted(
-        self, ciphertexts: List[ts.CKKSVector]
+            self, ciphertexts: List[ts.CKKSVector]
     ) -> ts.CKKSVector:
         """
         Aggregate encrypted vectors by summing them:
@@ -141,10 +137,10 @@ class CKKSSecureAggregator:
         return agg
 
     def decrypt_aggregate(
-        self,
-        enc_sum: ts.CKKSVector,
-        info: FlattenInfo,
-        num_clients: int,
+            self,
+            enc_sum: ts.CKKSVector,
+            info: FlattenInfo,
+            num_clients: int,
     ) -> List[np.ndarray]:
         """
         Decrypt the aggregated ciphertext, divide by number of clients,
