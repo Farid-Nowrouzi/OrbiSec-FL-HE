@@ -1,10 +1,11 @@
+import time
+from typing import List
+
 import flwr as fl
 import numpy as np
 import torch
 
-from typing import List
-
-from src.utils import binary_accuracy
+from src.utils import binary_accuracy, params_nbytes
 from src.secure import apply_security_to_params
 
 
@@ -25,18 +26,18 @@ class TelemetryClient(fl.client.NumPyClient):
     """
     Flower NumPyClient wrapping a PyTorch model and its local train/val loaders.
 
-    secure_mode: "none" | "mask" | "ckks" (ckks currently falls back to mask).
+    secure_mode: "none" | "mask" | "ckks".
     """
 
     def __init__(
-        self,
-        model: torch.nn.Module,
-        train_loader,
-        val_loader,
-        device: torch.device,
-        secure_mode: str = "none",
-        noise_std: float = 0.01,
-        local_epochs: int = 1,
+            self,
+            model: torch.nn.Module,
+            train_loader,
+            val_loader,
+            device: torch.device,
+            secure_mode: str = "none",
+            noise_std: float = 0.01,
+            local_epochs: int = 1,
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -55,11 +56,17 @@ class TelemetryClient(fl.client.NumPyClient):
         return params
 
     def fit(self, parameters, config):
+        # Load global parameters
         set_parameters(self.model, parameters)
         self.model.train()
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
         criterion = torch.nn.BCELoss()
+
+        # -----------------------------
+        # 1) Local training time
+        # -----------------------------
+        train_start = time.time()
 
         for _ in range(self.local_epochs):
             for xb, yb in self.train_loader:
@@ -71,7 +78,12 @@ class TelemetryClient(fl.client.NumPyClient):
                 loss.backward()
                 optimizer.step()
 
-        # Compute train metrics after last epoch
+        train_end = time.time()
+        train_time = train_end - train_start
+
+        # -----------------------------
+        # 2) Compute train metrics
+        # -----------------------------
         self.model.eval()
         all_preds, all_labels = [], []
         train_loss = 0.0
@@ -92,8 +104,13 @@ class TelemetryClient(fl.client.NumPyClient):
         all_preds = torch.cat(all_preds, dim=0)
         all_labels = torch.cat(all_labels, dim=0)
         acc = binary_accuracy(all_preds, all_labels)
+        avg_train_loss = train_loss / max(1, num_examples)
 
-        # --- Apply security to parameters before sending to server ---
+        # -----------------------------
+        # 3) Apply security + measure time and bytes
+        # -----------------------------
+        sec_start = time.time()
+
         params = get_parameters(self.model)
         params = apply_security_to_params(
             params,
@@ -102,9 +119,17 @@ class TelemetryClient(fl.client.NumPyClient):
             rng=self.rng,
         )
 
+        sec_end = time.time()
+        sec_time = sec_end - sec_start
+
+        client_bytes_up = params_nbytes(params)
+
         metrics = {
-            "loss": train_loss / max(1, num_examples),
-            "accuracy": acc,
+            "train_loss": avg_train_loss,
+            "train_accuracy": acc,
+            "train_time": train_time,
+            "sec_time": sec_time,
+            "client_bytes_up": float(client_bytes_up),
         }
 
         return params, num_examples, metrics
@@ -138,12 +163,12 @@ class TelemetryClient(fl.client.NumPyClient):
 
 
 def get_client_fn(
-    clients_data,
-    device: torch.device,
-    model_cls,
-    local_epochs: int = 1,
-    secure_mode: str = "none",
-    noise_std: float = 0.01,
+        clients_data,
+        device: torch.device,
+        model_cls,
+        local_epochs: int = 1,
+        secure_mode: str = "none",
+        noise_std: float = 0.01,
 ):
     """
     Factory that returns a Flower client_fn for flwr.simulation.start_simulation.

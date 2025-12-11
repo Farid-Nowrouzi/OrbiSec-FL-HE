@@ -18,17 +18,27 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 from typing import List
+import sys
 
 import numpy as np
+
+# ---------------------------------------------------------------------
+# Make sure we can import from the project src/ package
+# (so that "from src.secure_he import ..." works when we run this file
+#  as: python experiments/run_week2_he_demo.py)
+# ---------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.secure_he import CKKSSecureAggregator, FlattenInfo
 
 
 def simulate_client_updates(
-    num_clients: int,
-    num_layers: int,
-    layer_dim: int,
-    noise_scale: float = 0.01,
+        num_clients: int,
+        num_layers: int,
+        layer_dim: int,
+        noise_scale: float = 0.01,
 ) -> List[List[np.ndarray]]:
     """
     Create synthetic "updates" for each client.
@@ -55,7 +65,7 @@ def simulate_client_updates(
 
 
 def plain_fedavg(
-    client_updates: List[List[np.ndarray]],
+        client_updates: List[List[np.ndarray]],
 ) -> List[np.ndarray]:
     """
     Standard FedAvg on numpy arrays (no encryption).
@@ -134,7 +144,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 5) Save a small CSV in results/
     # ------------------------------------------------------------------
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = PROJECT_ROOT
     results_dir = project_root / "results"
     results_dir.mkdir(exist_ok=True)
 

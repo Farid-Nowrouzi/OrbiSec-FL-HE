@@ -50,7 +50,9 @@ def _evaluate_model(model: torch.nn.Module, val_loader, device: torch.device) ->
 class LoggingFedAvg(fl.server.strategy.FedAvg):
     """
     FedAvg strategy that logs per-round metrics to CSV:
-    round, acc, bytes_up, bytes_down, round_time, active_clients, seed, config.
+    round, acc, bytes_up, bytes_down, round_time, active_clients,
+    seed, secure_mode, num_clients, dropout_prob,
+    plus aggregated client-side metrics and aggregation time.
 
     If secure_mode == "ckks", the aggregation is performed using the
     CKKSSecureAggregator instead of the standard FedAvg averaging.
@@ -99,14 +101,7 @@ class LoggingFedAvg(fl.server.strategy.FedAvg):
     # ------------------------------------------------------------------
 
     def _aggregate_fit_ckks(self, results) -> Optional[Parameters]:
-        """Aggregate client updates using CKKS homomorphic encryption.
-
-        This mirrors the Week-2 demo:
-        1. Collect client parameter ndarrays.
-        2. Flatten all updates.
-        3. Encrypt, homomorphically sum, and decrypt.
-        4. Reconstruct layer-shaped ndarrays and wrap as Flower Parameters.
-        """
+        """Aggregate client updates using CKKS homomorphic encryption."""
         if not results:
             return None
 
@@ -150,44 +145,96 @@ class LoggingFedAvg(fl.server.strategy.FedAvg):
             results,
             failures,
     ) -> Tuple[Optional[Parameters], Dict[str, Scalar]]:
+        # start_time approximates start of this round
         start_time = self._last_time
 
-        # Use CKKS-based aggregation only when requested
+        # -----------------------------
+        # 1) Aggregation (plain or CKKS) + aggregation time
+        # -----------------------------
+        agg_start = time.time()
+
         if self.secure_mode.lower() == "ckks":
             aggregated_parameters = self._aggregate_fit_ckks(results)
-            # We ignore client metrics here (can be added later if needed)
+            # We ignore client metrics here; they are still available in `results`.
         else:
             # Standard FedAvg aggregation
             aggregated_parameters, _ = super().aggregate_fit(
                 server_round, results, failures
             )
 
+        agg_end = time.time()
+        agg_time = agg_end - agg_start
+
+        # -----------------------------
+        # 2) Round timing (overall)
+        # -----------------------------
         end_time = time.time()
         self._last_time = end_time
-
         round_time = end_time - start_time
+
+        # -----------------------------
+        # 3) Client-side aggregated metrics
+        # -----------------------------
         active_clients = len(results)
+        total_examples = sum(fit_res.num_examples for _, fit_res in results) or 1
+
+        def weighted_avg(key: str) -> float:
+            num = 0.0
+            for _, fit_res in results:
+                val = fit_res.metrics.get(key) if fit_res.metrics is not None else None
+                if val is not None:
+                    num += float(val) * fit_res.num_examples
+            return num / float(total_examples)
+
+        if active_clients > 0:
+            avg_train_loss = weighted_avg("train_loss")
+            avg_train_accuracy = weighted_avg("train_accuracy")
+            avg_train_time = weighted_avg("train_time")
+            avg_sec_time = weighted_avg("sec_time")
+            avg_client_bytes_up = weighted_avg("client_bytes_up")
+        else:
+            avg_train_loss = float("nan")
+            avg_train_accuracy = float("nan")
+            avg_train_time = float("nan")
+            avg_sec_time = float("nan")
+            avg_client_bytes_up = float("nan")
+
+        # -----------------------------
+        # 4) Communication accounting
+        # -----------------------------
         bytes_up = self.param_bytes * active_clients
         bytes_down = self.param_bytes * active_clients
 
-        # Evaluate global model on validation loader
+        # -----------------------------
+        # 5) Evaluate global model on validation loader
+        # -----------------------------
         if aggregated_parameters is not None:
             _set_model_parameters_from_fl(self.model, aggregated_parameters)
             acc = _evaluate_model(self.model, self.val_loader, self.device)
         else:
             acc = float("nan")
 
+        # -----------------------------
+        # 6) Log to CSV
+        # -----------------------------
         row = {
             "round": server_round,
             "acc": acc,
             "bytes_up": bytes_up,
             "bytes_down": bytes_down,
             "round_time": round_time,
+            "agg_time": agg_time,
             "active_clients": active_clients,
             "seed": self.seed,
             "secure_mode": self.secure_mode,
             "num_clients": self.num_clients,
             "dropout_prob": self.dropout_prob,
+            # aggregated client-side metrics:
+            "avg_train_loss": avg_train_loss,
+            "avg_train_accuracy": avg_train_accuracy,
+            "avg_train_time": avg_train_time,
+            "avg_sec_time": avg_sec_time,
+            "avg_client_bytes_up": avg_client_bytes_up,
         }
         append_to_csv(self.results_csv, row)
 

@@ -1,0 +1,4 @@
+mode,rounds,final_acc,mean_acc,total_bytes_up,total_bytes_down,avg_bytes_up_per_round,avg_bytes_down_per_round,avg_uplink_per_client,avg_downlink_per_client
+none,20,0.9949238300323486,0.8067258894443512,435600,435600,21780.0,21780.0,4356.0,4356.0
+mask,20,1.0,0.8527918756008148,435600,435600,21780.0,21780.0,4356.0,4356.0
+ckks,20,1.0,0.8201776593923569,435600,435600,21780.0,21780.0,4356.0,4356.0
