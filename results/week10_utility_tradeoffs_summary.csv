@@ -1,0 +1,5 @@
+mode,source_csv,final_acc,mean_acc,mean_acc_std,mean_acc_n,mean_round_time,mean_round_time_std,mean_round_time_n,mean_bytes_up,mean_bytes_up_std,mean_bytes_up_n,mean_bytes_down,mean_bytes_down_std,mean_bytes_down_n,note
+none,C:\Users\Farid\IdeaProjects\OrbiSec-FL-HE\results\results_none.csv,1.0,0.8200507611036301,0.16056162521666686,20,0.5194112658500671,1.8300180710626848,20,24340.0,0.0,20,21780.0,0.0,20,
+mask,C:\Users\Farid\IdeaProjects\OrbiSec-FL-HE\results\results_mask.csv,1.0,0.8432741105556488,0.13859790349379236,20,0.5238266348838806,1.881663087644862,20,24340.0,0.0,20,21780.0,0.0,20,
+secagg,C:\Users\Farid\IdeaProjects\OrbiSec-FL-HE\results\results_secagg.csv,1.0,0.842131981253624,0.13526702686379835,20,0.5921721448898313,1.852691326223124,20,38944.0,0.0,20,39640.0,0.0,20,
+ckks,C:\Users\Farid\IdeaProjects\OrbiSec-FL-HE\results\results_ckks.csv,1.0,0.848857867717743,0.1303810950491238,20,0.6026295065879822,2.083610132318137,20,24340.0,0.0,20,21780.0,0.0,20,

@@ -1,0 +1,13 @@
+mode,metric_value,metric_name,baseline
+ckks,0.5,Property inference (AUC),0.5
+mask,0.6238186666666667,Property inference (AUC),0.5
+none,0.6479093333333333,Property inference (AUC),0.5
+secagg,0.5,Property inference (AUC),0.5
+none,0.8277777777777778,Attribute inference (Accuracy),0.3333333333333333
+mask,0.835,Attribute inference (Accuracy),0.3333333333333333
+ckks,0.3333333333333333,Attribute inference (Accuracy),0.3333333333333333
+secagg,0.3333333333333333,Attribute inference (Accuracy),0.3333333333333333
+none,0.3194444444444445,Fingerprinting (Top-1 Accuracy),0.08333333333333333
+mask,0.1597222222222222,Fingerprinting (Top-1 Accuracy),0.08333333333333333
+ckks,0.0833333333333333,Fingerprinting (Top-1 Accuracy),0.08333333333333333
+secagg,0.08333333333333333,Fingerprinting (Top-1 Accuracy),0.08333333333333333

@@ -1,157 +1,240 @@
 # experiments/run_week6_threat_model.py
 
 """
-Week-6: Threat model diagram for OrbiSec-FL-HE.
+Week-6: Threat model diagram for OrbiSec-FL-HE .
 
 Generates a static figure showing:
 - LEO satellites (FL clients)
-- Ground station (FL server)
-- Network adversary
-- Three security modes: none, mask, ckks
+- Ground station (FL server / aggregator)
+- Passive network adversary (eavesdropper)
+- Three security modes: none, mask, ckks_like
 
 Output:
 - results/week6_threat_model.png
 """
 
-import os
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, FancyArrowPatch
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
 
-def draw_box(ax, xy, width, height, label, color="#ddeeff"):
-    rect = Rectangle(
-        xy, width, height,
-        linewidth=1.5,
+# -----------------------------
+# Drawing helpers
+# -----------------------------
+def rounded_box(ax, x, y, w, h, text, facecolor, fontsize=11, bold=True):
+    box = FancyBboxPatch(
+        (x, y),
+        w,
+        h,
+        boxstyle="round,pad=0.02,rounding_size=0.06",
+        linewidth=1.6,
         edgecolor="black",
-        facecolor=color
+        facecolor=facecolor,
     )
-    ax.add_patch(rect)
+    ax.add_patch(box)
+
     ax.text(
-        xy[0] + width / 2,
-        xy[1] + height / 2,
-        label,
+        x + w / 2,
+        y + h / 2,
+        text,
         ha="center",
         va="center",
+        fontsize=fontsize,
+        weight="bold" if bold else "normal",
+        )
+    return box
+
+
+def arrow(ax, x1, y1, x2, y2, text=None, text_dy=0.10):
+    a = FancyArrowPatch(
+        (x1, y1),
+        (x2, y2),
+        arrowstyle="->",
+        linewidth=1.8,
+        mutation_scale=16,
+        color="black",
+    )
+    ax.add_patch(a)
+
+    if text:
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        ax.text(mx, my + text_dy, text, ha="center", va="bottom", fontsize=9)
+
+
+def add_panel(ax, x, y, w, h, title, lines, facecolor="#f7f7f7"):
+    panel = FancyBboxPatch(
+        (x, y),
+        w,
+        h,
+        boxstyle="round,pad=0.03,rounding_size=0.06",
+        linewidth=1.2,
+        edgecolor="black",
+        facecolor=facecolor,
+    )
+    ax.add_patch(panel)
+
+    ax.text(
+        x + 0.03,
+        y + h - 0.08,
+        title,
+        ha="left",
+        va="top",
         fontsize=10,
         weight="bold",
         )
 
-
-def draw_arrow(ax, xy_from, xy_to, text=None):
-    arrow = FancyArrowPatch(
-        xy_from, xy_to,
-        arrowstyle="->",
-        linewidth=1.5,
-        mutation_scale=15,
-        color="black",
-    )
-    ax.add_patch(arrow)
-    if text is not None:
-        mid = ((xy_from[0] + xy_to[0]) / 2, (xy_from[1] + xy_to[1]) / 2)
+    yy = y + h - 0.18
+    for line in lines:
         ax.text(
-            mid[0],
-            mid[1] + 0.1,
-            text,
-            ha="center",
-            va="bottom",
-            fontsize=8,
+            x + 0.06,
+            yy,
+            f"• {line}",
+            ha="left",
+            va="top",
+            fontsize=9,
             )
+        yy -= 0.11
+
+    return panel
 
 
-def main():
+# -----------------------------
+# Main
+# -----------------------------
+def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
     results_dir = project_root / "results"
     results_dir.mkdir(exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 6)
+    ax.axis("off")
 
-    # --- Layout coordinates (in arbitrary units) ---
-    # Left: satellites stacked vertically
-    sat_w, sat_h = 1.6, 0.6
-    sat_x = 0.5
-    sat_y_base = 1.0
-    sat_delta = 0.9
+    # Title
+    ax.text(
+        5,
+        5.75,
+        "Week-6 Threat Model for OrbiSec-FL-HE",
+        ha="center",
+        va="center",
+        fontsize=16,
+        weight="bold",
+    )
+    ax.text(
+        5,
+        5.47,
+        "Federated Learning over LEO link with a passive network eavesdropper",
+        ha="center",
+        va="center",
+        fontsize=10,
+    )
 
-    satellites = [
-        (sat_x, sat_y_base + i * sat_delta)
-        for i in range(3)
-    ]
+    # --- Entities ---
+    # Satellites (clients)
+    sat_w, sat_h = 2.2, 0.8
+    sat_x = 0.8
+    sat_ys = [3.9, 2.7, 1.5]
 
-    for i, (x, y) in enumerate(satellites):
-        draw_box(
+    for i, y in enumerate(sat_ys, start=1):
+        rounded_box(
             ax,
-            (x, y),
+            sat_x,
+            y,
             sat_w,
             sat_h,
-            label=f"Satellite {i+1}\n(FL client)",
-            color="#e3f2fd",
+            text=f"Satellite {i}\n(FL client)",
+            facecolor="#e3f2fd",
+            fontsize=11,
         )
 
-    # Right: ground station (server)
-    server_x, server_y = 6.0, 1.6
-    server_w, server_h = 2.2, 1.6
-    draw_box(
+    # Adversary
+    adv_x, adv_y = 4.35, 2.45
+    adv_w, adv_h = 1.85, 1.2
+    rounded_box(
         ax,
-        (server_x, server_y),
-        server_w,
-        server_h,
-        label="Ground Station\n(FL server)",
-        color="#e8f5e9",
-    )
-
-    # Middle: adversary on the link
-    adv_x, adv_y = 3.6, 1.8
-    adv_w, adv_h = 1.4, 1.0
-    draw_box(
-        ax,
-        (adv_x, adv_y),
+        adv_x,
+        adv_y,
         adv_w,
         adv_h,
-        label="Network\nAdversary",
-        color="#ffebee",
+        text="Network Adversary\n(passive eavesdropper)",
+        facecolor="#ffebee",
+        fontsize=10,
     )
 
-    # Arrows from satellites -> adversary -> server
-    for x, y in satellites:
-        draw_arrow(
-            ax,
-            (x + sat_w, y + sat_h / 2),
-            (adv_x, adv_y + adv_h / 2),
-        )
-    draw_arrow(
+    # Ground station
+    srv_x, srv_y = 7.05, 2.15
+    srv_w, srv_h = 2.5, 1.8
+    rounded_box(
         ax,
-        (adv_x + adv_w, adv_y + adv_h / 2),
-        (server_x, server_y + server_h / 2),
+        srv_x,
+        srv_y,
+        srv_w,
+        srv_h,
+        text="Ground Station\n(FL server)",
+        facecolor="#e8f5e9",
+        fontsize=11,
     )
 
-    # Text panel at bottom: what adversary sees in each mode
-    text_y = 0.1
-    ax.text(
-        4.5,
-        text_y,
-        (
-            "Security modes (what the adversary observes on the channel):\n"
-            "  • none  : raw model updates (gradients/weights) → high leakage (DLG works).\n"
-            "  • mask  : masked updates = update + Gaussian noise → reduced leakage.\n"
-            "  • ckks  : CKKS ciphertexts → only encrypted aggregates, no raw updates."
-        ),
-        ha="center",
-        va="bottom",
-        fontsize=9,
+    # --- Links ---
+    # Clients -> adversary
+    for y in sat_ys:
+        arrow(
+            ax,
+            sat_x + sat_w,
+            y + sat_h / 2,
+            adv_x,
+            adv_y + adv_h / 2,
+            )
+
+    # Adversary -> server
+    arrow(
+        ax,
+        adv_x + adv_w,
+        adv_y + adv_h / 2,
+        srv_x,
+        srv_y + srv_h / 2,
+        text="uplink / downlink traffic",
+        text_dy=0.12,
+        )
+
+    # --- Panels ---
+    add_panel(
+        ax,
+        x=0.7,
+        y=0.15,
+        w=6.35,
+        h=1.25,
+        title="Security modes (what the adversary can observe on the channel)",
+        lines=[
+            "none: raw model updates (gradients/weights) -> highest leakage (DLG & inference attacks possible).",
+            "mask: masked / perturbed updates (random mask or noise-like perturbation) -> reduced leakage.",
+            "ckks_like: ciphertexts on the channel -> adversary cannot read raw updates (sees encrypted values only).",
+        ],
+        facecolor="#f7f7f7",
     )
 
-    ax.set_xlim(0, 9)
-    ax.set_ylim(0, 4.2)
-    ax.axis("off")
-    ax.set_title("Week-6 Threat Model for OrbiSec-FL-HE", fontsize=13, weight="bold")
+    add_panel(
+        ax,
+        x=7.15,
+        y=0.15,
+        w=2.75,
+        h=1.25,
+        title="Attacker assumptions",
+        lines=[
+            "Passive eavesdropper (records messages).",
+            "Sees timing + traffic volume metadata.",
+            "Does not compromise clients/server.",
+        ],
+        facecolor="#f7f7f7",
+    )
 
     out_path = results_dir / "week6_threat_model.png"
     fig.tight_layout()
-    fig.savefig(out_path, dpi=160)
+    fig.savefig(out_path, dpi=220)
     plt.close(fig)
 
     print(f"[Week-6] Threat model diagram saved to: {out_path}")

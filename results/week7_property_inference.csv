@@ -1,0 +1,10 @@
+seed,mode,auc,best_attack_acc,num_clients,rounds,n_samples_per_client,n_features,note
+42,none,0.61944,0.604,20,25,2000,32,
+42,mask,0.653696,0.63,20,25,2000,32,
+42,ckks,0.5,0.5,20,25,2000,32,Not observable under CKKS encrypted-channel threat model (random guess).
+123,none,0.682512,0.648,20,25,2000,32,
+123,mask,0.619472,0.596,20,25,2000,32,
+123,ckks,0.5,0.5,20,25,2000,32,Not observable under CKKS encrypted-channel threat model (random guess).
+233,none,0.641776,0.612,20,25,2000,32,
+233,mask,0.598288,0.604,20,25,2000,32,
+233,ckks,0.5,0.5,20,25,2000,32,Not observable under CKKS encrypted-channel threat model (random guess).

@@ -1,0 +1,4 @@
+mode,mse,psnr,ssim,note
+none,2.6889748701340935e-13,139.61191887575384,0.9999999999997645,
+mask,0.04370466507480206,27.502508346865312,0.9617073851357765,
+ckks,N/A,N/A,N/A,Not observable under CKKS encrypted-channel threat model.

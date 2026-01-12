@@ -1,52 +1,44 @@
 """
 run_week5_compare_modes.py
 
-Week-5 experiment:
-- Run the full Flower FL pipeline three times:
+Week-5 experiment (4 modes):
+- Run the full Flower FL pipeline four times:
     1) Baseline  (secure_mode = "none")
     2) Masked    (secure_mode = "mask")
-    3) CKKS HE   (secure_mode = "ckks")
+    3) SecAgg    (secure_mode = "secagg") [CLIENT pairwise mask simulation + server overhead model]
+    4) CKKS HE   (secure_mode = "ckks")   [server-side HE aggregation]
 - Each run logs per-round metrics to its own CSV in ./results.
 - Then we:
-    * Plot three curves (none/mask/ckks) for:
+    * Plot four curves (none/mask/secagg/ckks) for:
         - Accuracy vs rounds
         - Uplink bytes vs rounds
+        - Cumulative uplink bytes vs rounds
         - Round time vs rounds
-    * Compute a summary table with:
-        - final accuracy
-        - mean training loss
-        - mean training accuracy
-        - convergence speed (#round to reach >= 0.9 acc)
-        - avg client time per round
-        - avg server agg_time per round
-        - total uplink bytes
-        - total communication bytes (up+down)
+        - Steady-state round time (rounds >= 2)
+    * Compute a summary table.
 
-Outputs (all in ./results):
-- results_none.csv
-- results_mask.csv
-- results_ckks.csv
-- week5_acc_three_modes.png
-- week5_bytes_up_three_modes.png
-- week5_round_time_three_modes.png
-- week5_summary.csv
+IMPORTANT:
+- Pairwise-mask SecAgg requires NO DROPOUT (all clients each round), otherwise masks won't cancel.
+  So we automatically override dropout_prob=0.0 for mode="secagg".
+- For bytes plots: some modes may have identical bytes, causing curves to overlap perfectly.
+  We apply a plotting-only tiny X-JITTER to make overlapping lines visible without changing y-values.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import flwr as fl
-import torch
-import pandas as pd
 import matplotlib
 
 matplotlib.use("Agg")  # headless
-import matplotlib.pyplot as plt  # noqa: E402  (after setting backend)
+import matplotlib.pyplot as plt  # noqa: E402
+
+import pandas as pd
+import torch
 
 # ---------------------------------------------------------------------
 # Make sure project root (with src/) is importable
@@ -56,9 +48,9 @@ PROJECT_ROOT = THIS_FILE.parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.client import get_client_fn
 from src.data import generate_synthetic_telemetry
 from src.model import MLP
-from src.client import get_client_fn
 from src.server import make_strategy
 from src.utils import set_global_seeds
 
@@ -76,37 +68,38 @@ def run_single_mode(
         device: torch.device,
         results_dir: Path,
 ) -> Path:
-    """
-    Run one Flower simulation with the given security mode.
+    assert mode in ["none", "mask", "secagg", "ckks"], f"Unknown mode {mode}"
 
-    Returns:
-        Path to the CSV file with per-round metrics.
-    """
-    assert mode in ["none", "mask", "ckks"], f"Unknown mode {mode}"
+    #  IMPORTANT: SecAgg pairwise masking needs NO DROPOUT
+    effective_dropout = float(dropout_prob)
+    if mode == "secagg" and effective_dropout != 0.0:
+        print(
+            f"[Week-5] NOTE: overriding dropout_prob={effective_dropout} -> 0.0 for mode='secagg' "
+            f"(pairwise-mask SecAgg requires full participation)."
+        )
+        effective_dropout = 0.0
 
-    # Set seeds so that each mode starts from the same initial conditions
+    # Seed so all modes start comparably
     set_global_seeds(seed)
 
-    # Build global validation loader from client 0 (same as Week-3)
+    # Build global validation loader from client 0
     import torch.utils.data as data
 
     X0, y0 = clients_data[0]
     n0 = len(X0)
     split = int(0.8 * n0)
-
     val_ds = data.TensorDataset(X0[split:], y0[split:])
     val_loader = data.DataLoader(val_ds, batch_size=64, shuffle=False)
 
     # Global model
-    input_dim = X0.shape[1]
-    model = MLP(input_dim=input_dim, hidden_dim=32)
+    model = MLP(input_dim=X0.shape[1], hidden_dim=32)
 
-    # Results CSV for this mode
+    # Results CSV
     csv_path = results_dir / f"results_{mode}.csv"
     if csv_path.exists():
         csv_path.unlink()
 
-    # Strategy with logging (LoggingFedAvg)
+    # Strategy (server decides secure_mode behavior)
     strategy = make_strategy(
         model=model,
         val_loader=val_loader,
@@ -115,26 +108,39 @@ def run_single_mode(
         seed=seed,
         secure_mode=mode,
         num_clients=num_clients,
-        dropout_prob=dropout_prob,
+        dropout_prob=effective_dropout,  #  use effective dropout
     )
 
-    # Client function
-    # - Mask mode: use small Gaussian noise
-    # - None/CKKS: no client-side noise (CKKS is server-side)
-    noise_std = 0.01 if mode == "mask" else 0.0
+    # ------------------------------------------------------------
+    # Client security configuration
+    # ------------------------------------------------------------
+    # mask  -> client-side Gaussian noise (baseline obfuscation)
+    # secagg-> CLIENT pairwise masking simulation (Bonawitz-style cancellation)
+    # ckks  -> server-side HE aggregation; client remains plain
+    # none  -> plain
+    if mode == "mask":
+        client_secure_mode = "mask"
+        noise_std = 0.01
+    elif mode == "secagg":
+        client_secure_mode = "secagg"
+        # mask_std for pairwise secagg masks (uses noise_std in your client.py)
+        noise_std = 0.01
+    else:
+        client_secure_mode = "none"
+        noise_std = 0.0
 
     client_fn = get_client_fn(
         clients_data=clients_data,
         device=device,
         model_cls=MLP,
         local_epochs=1,
-        secure_mode=mode,
+        secure_mode=client_secure_mode,
         noise_std=noise_std,
     )
 
     print(
         f"\n[Week-5] Starting simulation for mode='{mode}' "
-        f"(rounds={rounds}, clients={num_clients}, dropout={dropout_prob})"
+        f"(rounds={rounds}, clients={num_clients}, dropout={effective_dropout})"
     )
 
     fl.simulation.start_simulation(
@@ -149,22 +155,105 @@ def run_single_mode(
 
 
 # ---------------------------------------------------------------------
-# 2) Helper: plotting three-curve figures
+# 2) Plotting helpers
 # ---------------------------------------------------------------------
-def _plot_three_modes(
+def _series_key(values: List[float], ndigits: int = 6) -> Tuple:
+    """Create a hashable key for a numeric series (rounded)."""
+    return tuple(round(float(v), ndigits) for v in values)
+
+
+def _compute_overlap_jitter(
+        dfs: Dict[str, pd.DataFrame],
+        metric_col: str,
+        order: List[str],
+        *,
+        steady_state: bool = False,
+        jitter_step: float = 0.03,
+) -> Dict[str, float]:
+    """
+    Detect identical y-series across modes and assign tiny plotting-only X jitter offsets.
+
+    jitter_step is in "round units" (e.g., 0.03 means round 5 becomes 5.03).
+    This keeps y-values unchanged and still makes curves visible.
+    """
+    keys: Dict[str, Tuple] = {}
+    for mode in order:
+        df = dfs.get(mode)
+        if df is None or df.empty:
+            continue
+        if "round" not in df.columns or metric_col not in df.columns:
+            continue
+
+        df_plot = df.copy()
+        if steady_state:
+            df_plot = df_plot[df_plot["round"] >= 2]
+
+        keys[mode] = _series_key(df_plot[metric_col].tolist(), ndigits=6)
+
+    jitter = {m: 0.0 for m in order}
+    group_map: Dict[Tuple, List[str]] = {}
+    for mode, k in keys.items():
+        group_map.setdefault(k, []).append(mode)
+
+    for _, modes in group_map.items():
+        if len(modes) <= 1:
+            continue
+        for i, m in enumerate(modes):
+            jitter[m] = float(i) * float(jitter_step)
+
+    return jitter
+
+
+def _plot_multi_modes(
         dfs: Dict[str, pd.DataFrame],
         metric_col: str,
         ylabel: str,
         title: str,
         out_path: Path,
+        order: List[str],
+        *,
+        steady_state: bool = False,
+        overlap_aware: bool = False,
 ) -> None:
-    plt.figure(figsize=(7, 4))
+    """
+    Plot curves for the given metric across modes.
 
-    for mode, df in dfs.items():
-        if metric_col not in df.columns:
-            print(f"[Week-5] WARNING: '{metric_col}' not in columns for mode={mode}")
+    steady_state:
+      - if True, plots only rounds >= 2
+    overlap_aware:
+      - if True, apply plotting-only x-jitter when series overlap perfectly
+    """
+    plt.figure(figsize=(8.5, 4.8))
+
+    jitter = {m: 0.0 for m in order}
+    if overlap_aware:
+        jitter = _compute_overlap_jitter(
+            dfs,
+            metric_col=metric_col,
+            order=order,
+            steady_state=steady_state,
+            jitter_step=0.03,
+        )
+
+    for mode in order:
+        df = dfs.get(mode)
+        if df is None or df.empty:
+            print(f"[Week-5] WARNING: empty df for mode={mode}")
             continue
-        plt.plot(df["round"], df[metric_col], marker="o", label=mode)
+        if "round" not in df.columns:
+            print(f"[Week-5] WARNING: 'round' missing for mode={mode}")
+            continue
+        if metric_col not in df.columns:
+            print(f"[Week-5] WARNING: '{metric_col}' missing for mode={mode}")
+            continue
+
+        df_plot = df.copy()
+        if steady_state:
+            df_plot = df_plot[df_plot["round"] >= 2]
+
+        x = df_plot["round"].astype(float).values + float(jitter.get(mode, 0.0))
+        y = df_plot[metric_col].astype(float).values
+        plt.plot(x, y, marker="o", label=mode)
 
     plt.xlabel("Round")
     plt.ylabel(ylabel)
@@ -172,49 +261,102 @@ def _plot_three_modes(
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(out_path, dpi=160)
+    plt.savefig(out_path, dpi=180)
+    plt.close()
+    print(f"[Week-5] Saved plot: {out_path}")
+
+
+def _plot_cumulative_uplink(
+        dfs: Dict[str, pd.DataFrame],
+        out_path: Path,
+        order: List[str],
+) -> None:
+    plt.figure(figsize=(8.5, 4.8))
+
+    keys: Dict[str, Tuple] = {}
+    for mode in order:
+        df = dfs.get(mode)
+        if df is None or df.empty or "round" not in df.columns or "bytes_up" not in df.columns:
+            continue
+        cum = df["bytes_up"].astype(float).cumsum().tolist()
+        keys[mode] = _series_key(cum, ndigits=6)
+
+    jitter = {m: 0.0 for m in order}
+    group_map: Dict[Tuple, List[str]] = {}
+    for mode, k in keys.items():
+        group_map.setdefault(k, []).append(mode)
+
+    for _, modes in group_map.items():
+        if len(modes) <= 1:
+            continue
+        for i, m in enumerate(modes):
+            jitter[m] = 0.03 * float(i)
+
+    for mode in order:
+        df = dfs.get(mode)
+        if df is None or df.empty or "round" not in df.columns or "bytes_up" not in df.columns:
+            continue
+
+        x = df["round"].astype(float).values + float(jitter.get(mode, 0.0))
+        y = df["bytes_up"].astype(float).cumsum().values
+        plt.plot(x, y, marker="o", label=mode)
+
+    plt.xlabel("Round")
+    plt.ylabel("Cumulative uplink bytes")
+    plt.title("Week-5: Cumulative Uplink Bytes vs Rounds (overlap-aware)")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=180)
     plt.close()
     print(f"[Week-5] Saved plot: {out_path}")
 
 
 # ---------------------------------------------------------------------
-# 3) Helper: summarise metrics across modes
+# 3) Summary helper
 # ---------------------------------------------------------------------
-def summarise_modes(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None:
-    """
-    Build a summary table with the main metrics the professor requested.
-    """
+def summarise_modes(dfs: Dict[str, pd.DataFrame], out_path: Path, order: List[str]) -> None:
     rows: List[Dict] = []
-
-    for mode, df in dfs.items():
-        if df.empty:
+    for mode in order:
+        df = dfs.get(mode)
+        if df is None or df.empty:
             continue
 
-        # Final accuracy (last round)
-        final_acc = float(df["acc"].iloc[-1])
-
-        # Mean training loss/accuracy if present
+        final_acc = float(df["acc"].iloc[-1]) if "acc" in df.columns else float("nan")
         mean_loss = float(df["avg_train_loss"].mean()) if "avg_train_loss" in df.columns else float("nan")
-        mean_train_acc = float(df["avg_train_acc"].mean()) if "avg_train_acc" in df.columns else float("nan")
 
-        # Convergence speed: first round where acc >= 0.90 (can adjust threshold)
+        if "avg_train_accuracy" in df.columns:
+            mean_train_acc = float(df["avg_train_accuracy"].mean())
+        elif "avg_train_acc" in df.columns:
+            mean_train_acc = float(df["avg_train_acc"].mean())
+        else:
+            mean_train_acc = float("nan")
+
         conv_thresh = 0.90
         conv_round = float("nan")
-        above = df[df["acc"] >= conv_thresh]
-        if not above.empty:
-            conv_round = int(above["round"].iloc[0])
+        if "acc" in df.columns and "round" in df.columns:
+            above = df[df["acc"] >= conv_thresh]
+            if not above.empty:
+                conv_round = int(above["round"].iloc[0])
 
-        # Timing overheads
-        if "agg_time" in df.columns:
+        df_steady = df[df["round"] >= 2] if "round" in df.columns else df
+
+        if "agg_time" in df.columns and "round_time" in df.columns:
             avg_server_time = float(df["agg_time"].mean())
             avg_client_time = float((df["round_time"] - df["agg_time"]).mean())
+            steady_avg_round_time = float(df_steady["round_time"].mean())
+            steady_avg_agg_time = float(df_steady["agg_time"].mean())
         else:
             avg_server_time = float("nan")
-            avg_client_time = float(df["round_time"].mean())
+            avg_client_time = float(df["round_time"].mean()) if "round_time" in df.columns else float("nan")
+            steady_avg_round_time = (
+                float(df_steady["round_time"].mean()) if "round_time" in df_steady.columns else float("nan")
+            )
+            steady_avg_agg_time = float("nan")
 
-        # Communication overhead
-        total_bytes_up = int(df["bytes_up"].sum())
-        total_bytes = int(df["bytes_up"].sum() + df["bytes_down"].sum())
+        total_bytes_up = int(df["bytes_up"].sum()) if "bytes_up" in df.columns else 0
+        total_bytes_down = int(df["bytes_down"].sum()) if "bytes_down" in df.columns else 0
+        total_bytes = int(total_bytes_up + total_bytes_down)
 
         rows.append(
             {
@@ -225,6 +367,8 @@ def summarise_modes(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None:
                 "conv_round_acc>=0.90": conv_round,
                 "avg_client_time_s": avg_client_time,
                 "avg_server_agg_time_s": avg_server_time,
+                "steady_avg_round_time_s_rounds>=2": steady_avg_round_time,
+                "steady_avg_agg_time_s_rounds>=2": steady_avg_agg_time,
                 "total_bytes_up": total_bytes_up,
                 "total_bytes_total": total_bytes,
             }
@@ -241,16 +385,13 @@ def summarise_modes(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None:
 # 4) Main
 # ---------------------------------------------------------------------
 def main(args: argparse.Namespace) -> None:
-    # Device & seed
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Week-5] Using device: {device}")
     set_global_seeds(args.seed)
 
-    # Ensure results directory exists
     results_dir = PROJECT_ROOT / "results"
     results_dir.mkdir(exist_ok=True)
 
-    # Generate synthetic telemetry ONCE so all modes see the same data
     clients_data = generate_synthetic_telemetry(
         num_clients=args.clients,
         samples_per_client=2000,
@@ -259,9 +400,11 @@ def main(args: argparse.Namespace) -> None:
         seed=args.seed,
     )
 
-    # Run three modes
+    mode_order = ["none", "mask", "secagg", "ckks"]
+
+    # Run all modes
     csv_paths: Dict[str, Path] = {}
-    for mode in ["none", "mask", "ckks"]:
+    for mode in mode_order:
         csv_paths[mode] = run_single_mode(
             mode=mode,
             clients_data=clients_data,
@@ -273,47 +416,76 @@ def main(args: argparse.Namespace) -> None:
             results_dir=results_dir,
         )
 
-    # Load all CSVs
+    # Load CSVs
     dfs: Dict[str, pd.DataFrame] = {}
     for mode, path in csv_paths.items():
-        dfs[mode] = pd.read_csv(path)
+        try:
+            dfs[mode] = pd.read_csv(path)
+        except Exception as e:
+            print(f"[Week-5] WARNING: failed to read {path}: {e}")
+            dfs[mode] = pd.DataFrame()
 
-    # Three-curve plots
-    _plot_three_modes(
+    # Accuracy
+    _plot_multi_modes(
         dfs,
         metric_col="acc",
         ylabel="Accuracy",
-        title="Week-5: Accuracy vs Rounds (none vs mask vs ckks)",
-        out_path=results_dir / "week5_acc_three_modes.png",
+        title="Week-5: Accuracy vs Rounds (none vs mask vs secagg vs ckks)",
+        out_path=results_dir / "week5_acc_four_modes.png",
+        order=mode_order,
+        overlap_aware=False,
     )
 
-    _plot_three_modes(
+    # Bytes per round (overlap-aware)
+    _plot_multi_modes(
         dfs,
         metric_col="bytes_up",
         ylabel="Uplink bytes per round",
-        title="Week-5: Uplink Bytes vs Rounds",
-        out_path=results_dir / "week5_bytes_up_three_modes.png",
+        title="Week-5: Uplink Bytes vs Rounds (overlap-aware)",
+        out_path=results_dir / "week5_bytes_up_four_modes.png",
+        order=mode_order,
+        overlap_aware=True,
     )
 
-    _plot_three_modes(
+    # Cumulative bytes (overlap-aware)
+    _plot_cumulative_uplink(
+        dfs,
+        out_path=results_dir / "week5_bytes_up_cumulative_four_modes.png",
+        order=mode_order,
+    )
+
+    # Round time
+    _plot_multi_modes(
         dfs,
         metric_col="round_time",
         ylabel="Round time (s)",
-        title="Week-5: Round Time vs Rounds",
-        out_path=results_dir / "week5_round_time_three_modes.png",
+        title="Week-5: Round Time vs Rounds (none vs mask vs secagg vs ckks)",
+        out_path=results_dir / "week5_round_time_four_modes.png",
+        order=mode_order,
+        overlap_aware=False,
     )
 
-    # Summary CSV with all primary metrics
-    summarise_modes(dfs, out_path=results_dir / "week5_summary.csv")
+    # Steady-state round time (rounds >= 2)
+    _plot_multi_modes(
+        dfs,
+        metric_col="round_time",
+        ylabel="Round time (s)",
+        title="Week-5: Steady-State Round Time (Rounds >= 2)",
+        out_path=results_dir / "week5_round_time_steady_four_modes.png",
+        order=mode_order,
+        steady_state=True,
+        overlap_aware=False,
+    )
+
+    # Summary CSV
+    summarise_modes(dfs, out_path=results_dir / "week5_summary.csv", order=mode_order)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
     parser.add_argument("--rounds", type=int, default=20)
     parser.add_argument("--clients", type=int, default=8)
     parser.add_argument("--dropout_prob", type=float, default=0.3)
     parser.add_argument("--seed", type=int, default=42)
-
     args = parser.parse_args()
     main(args)

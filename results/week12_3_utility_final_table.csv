@@ -1,0 +1,5 @@
+mode,final_acc,mean_acc,mean_round_time,mean_total_comm,overhead_time_x,overhead_comm_x,conv_round_acc>=0.99,note,source_csv
+none,1.0,0.8200507611036301,0.5194112658500671,46120.0,1.0,1.0,14.0,,C:\Users\Farid\IdeaProjects\OrbiSec-FL-HE\results\results_none.csv
+mask,1.0,0.8432741105556488,0.5238266348838806,46120.0,1.0085007186484245,1.0,18.0,,C:\Users\Farid\IdeaProjects\OrbiSec-FL-HE\results\results_mask.csv
+secagg,1.0,0.842131981253624,0.5921721448898313,78584.0,1.1400833671188935,1.7039028620988725,18.0,,C:\Users\Farid\IdeaProjects\OrbiSec-FL-HE\results\results_secagg.csv
+ckks,1.0,0.848857867717743,0.6026295065879822,46120.0,1.160216472397302,1.0,17.0,,C:\Users\Farid\IdeaProjects\OrbiSec-FL-HE\results\results_ckks.csv
