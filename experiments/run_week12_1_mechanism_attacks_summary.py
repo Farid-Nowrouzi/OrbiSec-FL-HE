@@ -303,18 +303,33 @@ def plot_overview(summary: pd.DataFrame, out_path: Path) -> None:
     ax3 = plt.subplot(3, 1, 3)
     auc = summary["mia_auc"].values
     auc_std = summary["mia_auc_std"].values
-    ax3.bar(x, np.nan_to_num(auc, nan=0.0), yerr=np.nan_to_num(auc_std, nan=0.0), capsize=4)
-    ax3.axhline(0.5, linestyle="--", linewidth=1)
+
+    ax3.bar(
+        x,
+        np.nan_to_num(auc, nan=0.0),
+        yerr=np.nan_to_num(auc_std, nan=0.0),
+        capsize=4
+    )
+
+    # Random-guessing baseline
+    ax3.axhline(y=0.5, linestyle="--", linewidth=1)
+
     ax3.set_ylabel("Membership inference AUC")
     ax3.set_xlabel("Mode")
     ax3.set_xticks(x)
     ax3.set_xticklabels(summary["mode_display"].tolist())
 
+
+    ax3.set_ylim(0.25, 0.75)
+    ax3.set_yticks([0.25, 0.35, 0.45, 0.50, 0.55, 0.65, 0.75])
+
+    # Annotate bars
     for i, v in enumerate(auc):
         if np.isfinite(v):
             ax3.text(i, v, f"{v:.3f}", ha="center", va="bottom", fontsize=9)
 
     ax3.grid(axis="y", linestyle="--", alpha=0.3)
+
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=220)
