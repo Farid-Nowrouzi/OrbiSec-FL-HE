@@ -357,31 +357,99 @@ def plot_pareto_scatter(
     plt.title(title)
     plt.grid(True, alpha=0.25)
 
-    # Anti-overlap labeling:
-    # Use deterministic offsets by mode index and add arrows when close.
-    offsets = [(12, 10), (12, -12), (-58, 10), (-58, -12)]
-    for i, (xi, yi, lab) in enumerate(zip(x, y, labels)):
-        dx, dy = offsets[i % len(offsets)]
-        text = lab
-        if show_xy:
-            # Format x nicely if it looks like bytes
-            if "comm" in xcol.lower() or "bytes" in xcol.lower():
-                xfmt = f"{xi:.2e}"
+    # ------------------------------------------------------------
+    # Label placement (robust for "final_acc is flat" plots)
+    # ------------------------------------------------------------
+    def _fmt_x(val: float) -> str:
+        if "comm" in xcol.lower() or "bytes" in xcol.lower():
+            return f"{val/1e3:.1f} KB"
+        return f"{val:.3f}"
+
+    def _fmt_y(val: float) -> str:
+        return f"{val:.4f}".rstrip("0").rstrip(".")
+
+    ax = plt.gca()
+    order = np.argsort(x)
+
+    y_span = float(np.nanmax(y) - np.nanmin(y))
+    flat_y = ("final_acc" in ycol.lower()) or (y_span < 1e-6)
+
+    if flat_y:
+        # When y is (almost) constant, pixel offsets still collide.
+        # So we place label text in DATA coordinates with vertical jitter
+        # based on current axis height -> guaranteed separation.
+        x_span_ax = float(xmax - xmin) if xmax != xmin else 1.0
+        y_span_ax = float(ymax - ymin) if ymax != ymin else 1.0
+
+        # Deterministic “stacking” pattern
+        dy_pattern = [1, -1, 2, -2]
+        for k, idx in enumerate(order):
+            xi, yi, lab = x[idx], y[idx], labels[idx]
+
+            # shorter text for the flat case = cleaner and avoids overlap
+            if show_xy:
+                text = f"{lab}\n({_fmt_x(xi)} s, {_fmt_y(yi)})" if "time" in xcol.lower() else f"{lab}\n({_fmt_x(xi)}, {_fmt_y(yi)})"
             else:
-                xfmt = f"{xi:.3f}"
-            text = f"{lab}\n({xfmt}, {yi:.4f})"
-        plt.annotate(
-            text,
-            xy=(xi, yi),
-            xytext=(dx, dy),
-            textcoords="offset points",
-            ha="left",
-            va="bottom",
-            fontsize=9,
-            arrowprops=dict(arrowstyle="-", alpha=0.4),
-        )
+                text = lab
+
+            # small horizontal shift (data units) + stronger vertical jitter (data units)
+            dx_data = (0.03 * x_span_ax) * (1 if (k % 2 == 0) else -1)
+            dy_data = (0.07 * y_span_ax) * dy_pattern[k % len(dy_pattern)]
+
+            x_text = xi + dx_data
+            y_text = yi + dy_data
+
+            plt.annotate(
+                text,
+                xy=(xi, yi),
+                xytext=(x_text, y_text),
+                textcoords="data",
+                ha="left" if dx_data > 0 else "right",
+                va="center",
+                fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.25", alpha=0.15),
+                arrowprops=dict(arrowstyle="-", alpha=0.35),
+            )
+    else:
+        # Normal case: light repel in display coords
+        placed = []
+        for k, idx in enumerate(order):
+            xi, yi, lab = x[idx], y[idx], labels[idx]
+
+            text = lab
+            if show_xy:
+                text = f"{lab} ({_fmt_x(xi)}, {_fmt_y(yi)})"
+
+            # base offsets (points)
+            dx = 14 if (k % 2 == 0) else -80
+            dy = 16 if (k % 3 != 0) else -16
+
+            # display coords for collision checks
+            x_disp, y_disp = ax.transData.transform((xi, yi))
+
+            push = 0
+            for (px, py) in placed:
+                if abs((x_disp + dx) - px) < 85 and abs((y_disp + dy) - py) < 22:
+                    push += 22
+
+            dy = dy + push if dy >= 0 else dy - push
+            placed.append((x_disp + dx, y_disp + dy))
+
+            plt.annotate(
+                text,
+                xy=(xi, yi),
+                xytext=(dx, dy),
+                textcoords="offset points",
+                ha="left",
+                va="center",
+                fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.25", alpha=0.15),
+                arrowprops=dict(arrowstyle="-", alpha=0.35),
+            )
 
     _save_fig(out)
+
+
 
 
 # ------------------------------------------------------------
@@ -591,33 +659,34 @@ def main() -> None:
         show_xy=True,
     )
 
-    # Optional: final_acc Pareto ONLY if it varies (otherwise it’s misleading noise)
+    # Final-acc Pareto (ALWAYS generate for the report, even if saturated)
     finite_final = df["final_acc"].to_numpy(dtype=float)
     finite_final = finite_final[np.isfinite(finite_final)]
-    if len(finite_final) >= 2 and (float(np.max(finite_final)) - float(np.min(finite_final))) > FINAL_ACC_FLAT_EPS:
-        plot_pareto_scatter(
-            df=df,
-            xcol="mean_round_time",
-            ycol="final_acc",
-            out=RESULTS_DIR / "week12_3_pareto_finalacc_vs_time.png",
-            title="Week-12.3 Pareto: Final Accuracy vs Mean Round Time",
-            xlabel="Mean round time (sec) — lower is better",
-            ylabel="Final accuracy — higher is better",
-            show_xy=True,
-        )
+    if len(finite_final) >= 2 and (float(np.max(finite_final)) - float(np.min(finite_final))) <= FINAL_ACC_FLAT_EPS:
+        print("[Week-12.3] NOTE: final_acc is saturated/flat across modes -> plot will show overlap (handled by label stacking).")
 
-        plot_pareto_scatter(
-            df=df,
-            xcol="mean_total_comm",
-            ycol="final_acc",
-            out=RESULTS_DIR / "week12_3_pareto_finalacc_vs_comm.png",
-            title="Week-12.3 Pareto: Final Accuracy vs Mean Total Communication",
-            xlabel="Mean total comm per round (bytes_up + bytes_down) — lower is better",
-            ylabel="Final accuracy — higher is better",
-            show_xy=True,
-        )
-    else:
-        print("[Week-12.3] NOTE: final_acc is saturated/flat across modes -> skipping final_acc Pareto plots.")
+    plot_pareto_scatter(
+        df=df,
+        xcol="mean_round_time",
+        ycol="final_acc",
+        out=RESULTS_DIR / "week12_3_pareto_finalacc_vs_time.png",
+        title="Week-12.3 Pareto: Final Accuracy vs Mean Round Time",
+        xlabel="Mean round time (sec) — lower is better",
+        ylabel="Final accuracy — higher is better",
+        show_xy=True,
+    )
+
+    plot_pareto_scatter(
+        df=df,
+        xcol="mean_total_comm",
+        ycol="final_acc",
+        out=RESULTS_DIR / "week12_3_pareto_finalacc_vs_comm.png",
+        title="Week-12.3 Pareto: Final Accuracy vs Mean Total Communication",
+        xlabel="Mean total comm per round (bytes_up + bytes_down) — lower is better",
+        ylabel="Final accuracy — higher is better",
+        show_xy=True,
+    )
+
 
     # --------------------------
     # Heatmap (normalized + raw)
